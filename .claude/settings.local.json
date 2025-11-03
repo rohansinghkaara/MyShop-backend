@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init:*)",
+      "Bash(npm run dev:*)",
+      "Read(//c/Users/rohan/Rohan/Ecommerce Website/**)",
+      "Bash(curl:*)",
+      "Bash(npm test)",
+      "Bash(find:*)",
+      "Bash(python:*)",
+      "Bash(npm install:*)",
+      "Bash(npm start)",
+      "Bash(npm uninstall:*)",
+      "Bash(node server.js)",
+      "Bash(taskkill:*)",
+      "Bash(set PORT=3000)",
+      "Bash(echo $PORT)",
+      "Bash(set PORT=4000)",
+      "Bash(node:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
