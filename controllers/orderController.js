@@ -168,21 +168,28 @@ exports.createOrder = async (req, res, next) => {
 // @access  Private
 exports.getOrders = async (req, res, next) => {
   try {
-    let query;
+    const orderService = container.resolve('orderService');
     
     // If user is admin, get all orders, otherwise get only user's orders
+    let result;
     if (req.user.role === 'admin') {
-      query = Order.find().populate('user', 'name email');
+      result = await orderService.getAllOrders({
+        page: req.query.page || 1,
+        limit: req.query.limit || 10,
+        status: req.query.status || null
+      });
     } else {
-      query = Order.find({ user: req.user.id });
+      result = await orderService.getUserOrders(req.user.id, {
+        page: req.query.page || 1,
+        limit: req.query.limit || 10,
+        status: req.query.status || null
+      });
     }
-    
-    const orders = await query;
     
     res.status(200).json({
       success: true,
-      count: orders.length,
-      data: orders
+      count: result.orders?.length || 0,
+      data: result.orders || []
     });
   } catch (error) {
     logger.logError(error, req);
@@ -195,15 +202,13 @@ exports.getOrders = async (req, res, next) => {
 // @access  Private
 exports.getOrder = async (req, res, next) => {
   try {
-    const order = await Order.findById(req.params.id).populate('products.product');
+    const orderService = container.resolve('orderService');
+    const orderId = parseInt(req.params.id);
+    
+    const order = await orderService.getOrderById(orderId, req.user.id, req.user.role === 'admin');
     
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
-    }
-    
-    // Check if user is owner or admin
-    if (order.user.toString() !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Not authorized to access this order' });
     }
     
     res.status(200).json({
@@ -211,6 +216,12 @@ exports.getOrder = async (req, res, next) => {
       data: order
     });
   } catch (error) {
+    if (error.message === 'Order not found') {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    if (error.message === 'Not authorized to access this order') {
+      return res.status(403).json({ success: false, message: 'Not authorized to access this order' });
+    }
     logger.logError(error, req);
     next(error); // Pass to global error handler
   }

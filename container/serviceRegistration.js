@@ -16,6 +16,14 @@ const PaymentService = require('../services/PaymentService');
 const InventoryService = require('../services/InventoryService');
 const NotificationService = require('../services/NotificationService');
 
+// Import new SOLID architecture services
+const PhonePEGateway = require('../services/gateways/PhonePEGateway');
+const RazorpayGateway = require('../services/gateways/RazorpayGateway');
+const PaymentGatewayFactory = require('../services/PaymentGatewayFactory');
+const CheckoutService = require('../services/CheckoutService');
+const OrderValidator = require('../services/OrderValidator');
+const PaymentVerifier = require('../services/PaymentVerifier');
+
 // Import utils
 const logger = require('../utils/logger');
 
@@ -28,7 +36,19 @@ container.registerSingleton('orderRepository', createFactory(OrderRepository));
 // Register core services
 container.registerSingleton('cacheService', createFactory(CacheService));
 container.registerSingleton('notificationService', createFactory(NotificationService));
-container.registerSingleton('paymentService', createFactory(PaymentService));
+// PaymentService is exported as an instance, not a class
+container.registerInstance('paymentService', PaymentService);
+
+// Register payment gateways
+container.registerSingleton('phonepeGateway', createFactory(PhonePEGateway));
+container.registerSingleton('razorpayGateway', createFactory(RazorpayGateway));
+
+// Register payment gateway factory (already a singleton instance)
+container.registerInstance('paymentGatewayFactory', PaymentGatewayFactory);
+
+// Register validation and verification services
+container.registerSingleton('orderValidator', createFactory(OrderValidator));
+container.registerSingleton('paymentVerifier', createFactory(PaymentVerifier));
 
 // Register business services with their dependencies
 container.registerSingleton('userService', createFactory(UserService), ['userRepository']);
@@ -36,6 +56,16 @@ container.registerSingleton('cartService', createFactory(CartService), ['cartRep
 container.registerSingleton('productService', createFactory(ProductService), ['productRepository', 'cacheService']);
 container.registerSingleton('inventoryService', createFactory(InventoryService), ['productRepository', 'cacheService', 'notificationService']);
 container.registerSingleton('orderService', createFactory(OrderService), ['orderRepository', 'cartService', 'productRepository', 'paymentService', 'notificationService']);
+
+// Register checkout service with dependencies
+container.registerSingleton('checkoutService', createFactory(CheckoutService), [
+  'paymentGatewayFactory',
+  'orderService',
+  'cartService',
+  'orderValidator',
+  'paymentVerifier',
+  'productRepository'
+]);
 
 // Register utilities
 container.registerInstance('logger', logger);
@@ -78,12 +108,22 @@ const validateContainer = () => {
     'notificationService',
     'paymentService',
     
+    // Payment gateways
+    'phonepeGateway',
+    'razorpayGateway',
+    'paymentGatewayFactory',
+    
+    // Validation and verification
+    'orderValidator',
+    'paymentVerifier',
+    
     // Business services
     'userService',
     'cartService',
     'productService',
     'inventoryService',
     'orderService',
+    'checkoutService',
     
     // Utilities
     'logger'

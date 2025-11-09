@@ -40,9 +40,13 @@ exports.getProducts = async (req, res, next) => {
     // Direct fetch (cache temporarily bypassed for debugging timeouts)
     const filters = { category, search, minPrice, maxPrice, inStock, is_new, is_sale, sortBy, sortOrder };
     const result = await productRepository.findProductsWithPagination(page, limit, filters);
+    
+    // Enrich products with image galleries
+    const enrichedProducts = productRepository.enrichWithImageGallery(result.rows);
+    
     const totalPages = Math.ceil(result.count / limit);
     const cachedResult = {
-      products: result.rows,
+      products: enrichedProducts,
       pagination: {
         currentPage: page,
         totalPages,
@@ -84,7 +88,7 @@ exports.getProduct = async (req, res, next) => {
     const product = await cacheService.getOrSet(
       cacheKey,
       async () => {
-        const product = await productRepository.findProductById(productId);
+        const product = await productRepository.findById(productId);
         if (!product) {
           throw new Error('Product not found');
         }
@@ -93,11 +97,14 @@ exports.getProduct = async (req, res, next) => {
       600 // 10 minutes cache for individual products
     );
 
+    // Enrich product with image gallery
+    const enrichedProduct = productRepository.enrichWithImageGallery(product);
+
     logger.logRequest(req, res, Date.now() - startTime);
 
     res.status(200).json({
       success: true,
-      data: product
+      data: enrichedProduct
     });
   } catch (error) {
     logger.logError(error, req);
@@ -114,13 +121,80 @@ exports.createProduct = async (req, res, next) => {
   try {
     const productRepository = container.resolve('productRepository');
     const cacheService = container.resolve('cacheService');
+    const Category = require('../models/Category');
     
-    const product = await productRepository.createProduct(req.body);
+    // Prepare product data
+    const productData = { ...req.body };
+    
+    // Handle category: convert category name to categoryId if needed
+    // Support both category name (string) and categoryId (number)
+    if (productData.category && !productData.categoryId) {
+      // Check if category is a number (ID) or string (name)
+      const categoryId = parseInt(productData.category, 10);
+      
+      if (!isNaN(categoryId)) {
+        // Category is provided as ID
+        const category = await Category.findByPk(categoryId);
+        if (!category) {
+          return res.status(400).json({
+            success: false,
+            message: `Category with ID "${categoryId}" not found`
+          });
+        }
+        productData.categoryId = categoryId;
+      } else {
+        // Category is provided as name
+        const category = await Category.findOne({
+          where: { name: productData.category }
+        });
+        
+        if (!category) {
+          return res.status(400).json({
+            success: false,
+            message: `Category "${productData.category}" not found`
+          });
+        }
+        
+        productData.categoryId = category.id;
+      }
+      delete productData.category;
+    }
+    
+    // Handle image upload
+    if (req.fileInfo && req.fileInfo.url) {
+      productData.image_url = req.fileInfo.url;
+    }
+    
+    // Convert price from rupees to paise
+    if (productData.price) {
+      productData.price_paise = Math.round(parseFloat(productData.price) * 100);
+      delete productData.price;
+    }
+    
+    // Convert sale price from rupees to paise
+    if (productData.salePrice !== undefined && productData.salePrice !== null && productData.salePrice !== '') {
+      productData.sale_price_paise = Math.round(parseFloat(productData.salePrice) * 100);
+      delete productData.salePrice;
+    } else {
+      productData.sale_price_paise = null;
+    }
+    
+    // Ensure stock is an integer
+    if (productData.stock !== undefined) {
+      productData.stock = parseInt(productData.stock, 10);
+    }
+    
+    const product = await productRepository.createProduct(productData);
 
     // Invalidate relevant caches
     await cacheService.invalidateByPattern('products:*');
 
     logger.logRequest(req, res, Date.now() - startTime);
+    logger.info('Product created successfully', {
+      productId: product.id,
+      name: product.name,
+      categoryId: product.categoryId
+    });
 
     res.status(201).json({
       success: true,
@@ -142,14 +216,82 @@ exports.updateProduct = async (req, res, next) => {
   try {
     const productRepository = container.resolve('productRepository');
     const cacheService = container.resolve('cacheService');
+    const Category = require('../models/Category');
     
     const productId = req.params.id;
-    const updatedProduct = await productRepository.updateProduct(productId, req.body);
+    const updateData = { ...req.body };
+    
+    // Handle category: convert category name to categoryId if needed
+    // Support both category name (string) and categoryId (number)
+    if (updateData.category && !updateData.categoryId) {
+      // Check if category is a number (ID) or string (name)
+      const categoryId = parseInt(updateData.category, 10);
+      
+      if (!isNaN(categoryId)) {
+        // Category is provided as ID
+        const category = await Category.findByPk(categoryId);
+        if (!category) {
+          return res.status(400).json({
+            success: false,
+            message: `Category with ID "${categoryId}" not found`
+          });
+        }
+        updateData.categoryId = categoryId;
+      } else {
+        // Category is provided as name
+        const category = await Category.findOne({
+          where: { name: updateData.category }
+        });
+        
+        if (!category) {
+          return res.status(400).json({
+            success: false,
+            message: `Category "${updateData.category}" not found`
+          });
+        }
+        
+        updateData.categoryId = category.id;
+      }
+      delete updateData.category;
+    }
+    
+    // Handle image upload
+    if (req.fileInfo && req.fileInfo.url) {
+      updateData.image_url = req.fileInfo.url;
+    }
+    
+    // Convert price from rupees to paise if provided
+    if (updateData.price !== undefined) {
+      updateData.price_paise = Math.round(parseFloat(updateData.price) * 100);
+      delete updateData.price;
+    }
+    
+    // Convert sale price from rupees to paise if provided
+    if (updateData.salePrice !== undefined) {
+      if (updateData.salePrice !== null && updateData.salePrice !== '') {
+        updateData.sale_price_paise = Math.round(parseFloat(updateData.salePrice) * 100);
+      } else {
+        updateData.sale_price_paise = null;
+      }
+      delete updateData.salePrice;
+    }
+    
+    // Ensure stock is an integer if provided
+    if (updateData.stock !== undefined) {
+      updateData.stock = parseInt(updateData.stock, 10);
+    }
+    
+    const updatedProduct = await productRepository.updateProduct(productId, updateData);
 
     // Invalidate specific product cache and related caches
     await cacheService.invalidateProduct(productId);
+    await cacheService.invalidateByPattern('products:*');
 
     logger.logRequest(req, res, Date.now() - startTime);
+    logger.info('Product updated successfully', {
+      productId: updatedProduct.id,
+      updatedFields: Object.keys(updateData)
+    });
 
     res.status(200).json({
       success: true,
@@ -257,11 +399,14 @@ exports.searchProducts = async (req, res, next) => {
       180 // 3 minutes cache for search results
     );
 
+    // Enrich products with image galleries
+    const enrichedProducts = productRepository.enrichWithImageGallery(result.rows);
+
     logger.logRequest(req, res, Date.now() - startTime);
 
     res.status(200).json({
       success: true,
-      data: result.rows,
+      data: enrichedProducts,
       pagination: {
         currentPage: parseInt(page),
         totalPages: Math.ceil(result.count / limit),
@@ -332,11 +477,14 @@ exports.getNewProducts = async (req, res, next) => {
       300 // 5 minutes cache
     );
 
+    // Enrich products with image galleries
+    const enrichedProducts = productRepository.enrichWithImageGallery(products);
+
     logger.logRequest(req, res, Date.now() - startTime);
 
     res.status(200).json({
       success: true,
-      data: products
+      data: enrichedProducts
     });
   } catch (error) {
     logger.logError(error, req);
@@ -365,11 +513,14 @@ exports.getSaleProducts = async (req, res, next) => {
       300 // 5 minutes cache
     );
 
+    // Enrich products with image galleries
+    const enrichedProducts = productRepository.enrichWithImageGallery(products);
+
     logger.logRequest(req, res, Date.now() - startTime);
 
     res.status(200).json({
       success: true,
-      data: products
+      data: enrichedProducts
     });
   } catch (error) {
     logger.logError(error, req);

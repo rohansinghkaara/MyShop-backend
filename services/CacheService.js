@@ -115,7 +115,13 @@ class CacheService {
   }
 
   async getOrSet(key, fetchFunction, ttlSeconds = this.defaultTTL) {
-    const cached = await this.get(key);
+    // Add timeout to cache get operation
+    const getWithTimeout = Promise.race([
+      this.get(key),
+      new Promise((resolve) => setTimeout(() => resolve(null), 1000)) // 1 second timeout
+    ]);
+
+    const cached = await getWithTimeout;
     if (cached !== null) {
       return cached;
     }
@@ -123,7 +129,10 @@ class CacheService {
     try {
       const value = await fetchFunction();
       if (value !== null && value !== undefined) {
-        await this.set(key, value, ttlSeconds);
+        // Don't wait for cache set, fire and forget to avoid blocking
+        this.set(key, value, ttlSeconds).catch(err => {
+          logger.warn('Cache set failed (non-blocking):', err);
+        });
       }
       return value;
     } catch (error) {

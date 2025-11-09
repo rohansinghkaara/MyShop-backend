@@ -13,15 +13,24 @@ if (process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('sqlite:')) 
     logging: process.env.NODE_ENV === 'development' ? console.log : false,
   });
 } else if (process.env.DATABASE_URL) {
-  // PostgreSQL configuration for production
-  sequelize = new Sequelize(process.env.DATABASE_URL, {
+  // PostgreSQL configuration for production/Supabase
+  const isSupabase = process.env.DATABASE_URL.includes('supabase.co');
+  
+  // Remove sslmode from URL if present (we'll handle SSL via dialectOptions)
+  let databaseUrl = process.env.DATABASE_URL;
+  databaseUrl = databaseUrl.replace(/[?&]sslmode=[^&]*/g, '');
+  
+  sequelize = new Sequelize(databaseUrl, {
     dialect: 'postgres',
     protocol: 'postgres',
-    logging: false,
+    logging: process.env.NODE_ENV === 'development' ? console.log : false,
     dialectOptions: {
-      ssl: {
+      ssl: isSupabase ? {
         require: true,
-        rejectUnauthorized: false
+        rejectUnauthorized: false // Supabase uses self-signed certificates
+      } : {
+        require: true,
+        rejectUnauthorized: true
       }
     },
     pool: {

@@ -180,33 +180,27 @@ class InventoryService extends BaseService {
 
   async getLowStockProducts(threshold = this.LOW_STOCK_THRESHOLD) {
     try {
-      const cacheKey = this.cacheService.generateKey('inventory', 'low_stock', threshold);
-      
-      return await this.cacheService.getOrSet(
-        cacheKey,
-        async () => {
-          const products = await this.productRepository.model.findAll({
-            where: {
-              stock: {
-                [Op.lte]: threshold,
-                [Op.gt]: this.OUT_OF_STOCK_THRESHOLD
-              }
-            },
-            order: [['stock', 'ASC']],
-            limit: 100
-          });
-
-          return products.map(product => ({
-            id: product.id,
-            name: product.name,
-            category: product.category,
-            stock: product.stock,
-            price: product.price,
-            stockStatus: this.getStockStatus(product.stock)
-          }));
+      // Direct query without cache to avoid timeout issues
+      const products = await this.productRepository.model.findAll({
+        where: {
+          stock: {
+            [Op.lte]: threshold,
+            [Op.gt]: this.OUT_OF_STOCK_THRESHOLD
+          }
         },
-        300 // 5 minutes cache
-      );
+        attributes: ['id', 'name', 'categoryId', 'stock', 'price_paise'],
+        order: [['stock', 'ASC']],
+        limit: 100
+      });
+
+      return products.map(product => ({
+        id: product.id,
+        name: product.name,
+        categoryId: product.categoryId,
+        stock: product.stock,
+        price: (product.price_paise || 0) / 100, // Convert paise to rupees
+        stockStatus: this.getStockStatus(product.stock)
+      }));
     } catch (error) {
       logger.error('Error getting low stock products:', error);
       throw error;
@@ -215,30 +209,24 @@ class InventoryService extends BaseService {
 
   async getOutOfStockProducts() {
     try {
-      const cacheKey = this.cacheService.generateKey('inventory', 'out_of_stock');
-      
-      return await this.cacheService.getOrSet(
-        cacheKey,
-        async () => {
-          const products = await this.productRepository.model.findAll({
-            where: {
-              stock: this.OUT_OF_STOCK_THRESHOLD
-            },
-            order: [['updatedAt', 'DESC']],
-            limit: 100
-          });
-
-          return products.map(product => ({
-            id: product.id,
-            name: product.name,
-            category: product.category,
-            stock: product.stock,
-            price: product.price,
-            lastUpdated: product.updatedAt
-          }));
+      // Direct query without cache to avoid timeout issues
+      const products = await this.productRepository.model.findAll({
+        where: {
+          stock: this.OUT_OF_STOCK_THRESHOLD
         },
-        300 // 5 minutes cache
-      );
+        attributes: ['id', 'name', 'categoryId', 'stock', 'price_paise', 'updatedAt'],
+        order: [['updatedAt', 'DESC']],
+        limit: 100
+      });
+
+      return products.map(product => ({
+        id: product.id,
+        name: product.name,
+        categoryId: product.categoryId,
+        stock: product.stock,
+        price: (product.price_paise || 0) / 100, // Convert paise to rupees
+        lastUpdated: product.updatedAt
+      }));
     } catch (error) {
       logger.error('Error getting out of stock products:', error);
       throw error;
@@ -250,8 +238,8 @@ class InventoryService extends BaseService {
       const {
         includeCategories = true,
         includeStockStatus = true,
-        includeLowStock = true,
-        includeOutOfStock = true
+        includeLowStock = false, // Don't include by default to avoid timeout
+        includeOutOfStock = false // Don't include by default to avoid timeout
       } = options;
 
       const report = {
@@ -260,22 +248,22 @@ class InventoryService extends BaseService {
         details: {}
       };
 
-      // Get total products and stock summary
-      const [totalProducts, totalStock, stockByCategory] = await Promise.all([
+      // Get total products and stock summary with timeout protection
+      const [totalProducts, totalStock, stockByCategory] = await Promise.allSettled([
         this.productRepository.model.count(),
         this.productRepository.model.sum('stock'),
-        includeCategories ? this.getStockByCategory() : null
+        includeCategories ? this.getStockByCategory() : Promise.resolve({})
       ]);
 
       report.summary = {
-        totalProducts,
-        totalStockValue: totalStock || 0,
-        stockByCategory: stockByCategory
+        totalProducts: totalProducts.status === 'fulfilled' ? totalProducts.value : 0,
+        totalStockValue: totalStock.status === 'fulfilled' ? (totalStock.value || 0) : 0,
+        stockByCategory: stockByCategory.status === 'fulfilled' ? stockByCategory.value : {}
       };
 
       // Get stock status breakdown
       if (includeStockStatus) {
-        const [inStock, lowStock, criticalStock, outOfStock] = await Promise.all([
+        const [inStock, lowStock, criticalStock, outOfStock] = await Promise.allSettled([
           this.productRepository.model.count({
             where: { stock: { [Op.gt]: this.LOW_STOCK_THRESHOLD } }
           }),
@@ -301,20 +289,30 @@ class InventoryService extends BaseService {
         ]);
 
         report.summary.stockStatus = {
-          inStock,
-          lowStock,
-          criticalStock,
-          outOfStock
+          inStock: inStock.status === 'fulfilled' ? inStock.value : 0,
+          lowStock: lowStock.status === 'fulfilled' ? lowStock.value : 0,
+          criticalStock: criticalStock.status === 'fulfilled' ? criticalStock.value : 0,
+          outOfStock: outOfStock.status === 'fulfilled' ? outOfStock.value : 0
         };
       }
 
-      // Get detailed lists
+      // Get detailed lists only if requested (to avoid timeout)
       if (includeLowStock) {
-        report.details.lowStockProducts = await this.getLowStockProducts();
+        try {
+          report.details.lowStockProducts = await this.getLowStockProducts();
+        } catch (error) {
+          logger.warn('Failed to get low stock products:', error);
+          report.details.lowStockProducts = [];
+        }
       }
 
       if (includeOutOfStock) {
-        report.details.outOfStockProducts = await this.getOutOfStockProducts();
+        try {
+          report.details.outOfStockProducts = await this.getOutOfStockProducts();
+        } catch (error) {
+          logger.warn('Failed to get out of stock products:', error);
+          report.details.outOfStockProducts = [];
+        }
       }
 
       return report;
@@ -326,20 +324,29 @@ class InventoryService extends BaseService {
 
   async getStockByCategory() {
     try {
-      const results = await this.productRepository.model.findAll({
-        attributes: [
-          'category',
-          [this.productRepository.model.sequelize.fn('COUNT', this.productRepository.model.sequelize.col('id')), 'productCount'],
-          [this.productRepository.model.sequelize.fn('SUM', this.productRepository.model.sequelize.col('stock')), 'totalStock'],
-          [this.productRepository.model.sequelize.fn('AVG', this.productRepository.model.sequelize.col('stock')), 'averageStock']
-        ],
-        group: ['category'],
-        raw: true
-      });
+      const Category = require('../models/Category');
+      const Product = this.productRepository.model;
+      
+      // Use raw query with proper JOIN for better compatibility
+      const results = await Product.sequelize.query(
+        `SELECT 
+          COALESCE(c.name, 'Uncategorized') as categoryName,
+          COUNT(p.id) as productCount,
+          COALESCE(SUM(p.stock), 0) as totalStock,
+          COALESCE(AVG(p.stock), 0) as averageStock
+        FROM Products p
+        LEFT JOIN Categories c ON p.categoryId = c.id
+        GROUP BY c.id, c.name
+        ORDER BY categoryName`,
+        {
+          type: Product.sequelize.QueryTypes.SELECT,
+          raw: true
+        }
+      );
 
       return results.reduce((acc, result) => {
-        acc[result.category] = {
-          productCount: parseInt(result.productCount),
+        acc[result.categoryName] = {
+          productCount: parseInt(result.productCount) || 0,
           totalStock: parseInt(result.totalStock) || 0,
           averageStock: parseFloat(result.averageStock) || 0
         };

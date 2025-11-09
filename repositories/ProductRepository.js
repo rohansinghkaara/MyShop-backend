@@ -1,6 +1,7 @@
 const BaseRepository = require('./BaseRepository');
 const Product = require('../models/Product');
 const { Op, fn, col } = require('sequelize');
+const { getImageGallery } = require('../utils/imageUtils');
 
 class ProductRepository extends BaseRepository {
   constructor() {
@@ -211,6 +212,33 @@ class ProductRepository extends BaseRepository {
   // Alias for CacheService compatibility
   async getCategories() {
     return await this.getProductCategories();
+  }
+
+  /**
+   * Enrich product(s) with image galleries from folders
+   * @param {Object|Array} product(s) - Single product or array of products
+   * @returns {Object|Array} Product(s) with image_gallery field added
+   */
+  enrichWithImageGallery(products) {
+    if (Array.isArray(products)) {
+      return products.map(product => {
+        const productData = product.toJSON ? product.toJSON() : product;
+        const imageGallery = getImageGallery(productData.image_url);
+        return {
+          ...productData,
+          image_gallery: imageGallery.gallery,
+          images: imageGallery // For frontend compatibility
+        };
+      });
+    } else {
+      const productData = products.toJSON ? products.toJSON() : products;
+      const imageGallery = getImageGallery(productData.image_url);
+      return {
+        ...productData,
+        image_gallery: imageGallery.gallery,
+        images: imageGallery // For frontend compatibility
+      };
+    }
   }
 
   async findProductsByIds(productIds) {

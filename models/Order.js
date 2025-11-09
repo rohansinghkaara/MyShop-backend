@@ -59,6 +59,24 @@ const Order = sequelize.define('Order', {
     type: DataTypes.STRING(50),
     allowNull: true
   },
+  payment_gateway: {
+    type: DataTypes.ENUM('phonepe', 'razorpay', 'stripe'),
+    allowNull: true,
+    defaultValue: 'phonepe'
+  },
+  phonepe_merchant_transaction_id: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true
+  },
+  phonepe_transaction_id: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  phonepe_payment_instrument_type: {
+    type: DataTypes.STRING(50),
+    allowNull: true
+  },
   address_json: {
     type: DataTypes.JSON,
     allowNull: false,
@@ -137,6 +155,18 @@ const OrderItem = sequelize.define('OrderItem', {
 // Define associations
 Order.hasMany(OrderItem, { foreignKey: 'orderId', as: 'items' });
 OrderItem.belongsTo(Order, { foreignKey: 'orderId' });
+
+// Associate OrderItem with Product
+const Product = require('./Product');
+OrderItem.belongsTo(Product, {
+  foreignKey: 'productId',
+  as: 'Product'
+});
+
+Product.hasMany(OrderItem, {
+  foreignKey: 'productId',
+  as: 'orderItems'
+});
 
 // Instance methods
 Order.prototype.getTotalItems = function() {

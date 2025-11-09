@@ -367,6 +367,15 @@ class OrderService extends BaseService {
     }
   }
 
+  async getRecentOrders(limit = 10) {
+    try {
+      return await this.orderRepository.getRecentOrders(limit);
+    } catch (error) {
+      logger.error('Error getting recent orders:', error);
+      throw error;
+    }
+  }
+
   // Private helper methods
   validateShippingAddress(address) {
     const requiredFields = ['firstName', 'lastName', 'address', 'city', 'postalCode', 'country'];

@@ -28,15 +28,30 @@ router.post('/verify',
   checkoutController.verifyPayment
 );
 
-// @route   POST /api/razorpay/webhook
+// @route   POST /api/checkout/phonepe-webhook
+// @desc    Handle PhonePE webhook events
+// @access  Public (with signature verification)
+router.post('/phonepe-webhook', 
+  checkoutController.handlePhonePeWebhook
+);
+
+// @route   POST /api/checkout/razorpay-webhook
 // @desc    Handle Razorpay webhook events
 // @access  Public (with signature verification)
-router.post('/webhook', 
-  checkoutController.handleWebhook
+router.post('/razorpay-webhook', 
+  checkoutController.handleRazorpayWebhook
+);
+
+// @route   GET /api/checkout/payment-status/:merchantTransactionId
+// @desc    Check payment status
+// @access  Private
+router.get('/payment-status/:merchantTransactionId',
+  protect,
+  checkoutController.checkPaymentStatus
 );
 
 // @route   GET /api/checkout/config
-// @desc    Get Razorpay configuration for frontend
+// @desc    Get payment gateway configuration for frontend
 // @access  Public
 router.get('/config', 
   checkoutController.getConfig

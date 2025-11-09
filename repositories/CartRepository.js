@@ -2,6 +2,7 @@ const BaseRepository = require('./BaseRepository');
 const { Cart, CartItem } = require('../models/Cart');
 const Product = require('../models/Product');
 const { Op } = require('sequelize');
+const { getImageGallery } = require('../utils/imageUtils');
 
 class CartRepository extends BaseRepository {
   constructor() {
@@ -260,8 +261,26 @@ class CartRepository extends BaseRepository {
         return total + (item.quantity * parseFloat(item.price));
       }, 0) : 0;
 
+      // Enrich products with image galleries
+      const enrichedItems = cart.items ? cart.items.map(item => {
+        const itemData = item.toJSON ? item.toJSON() : item;
+        if (itemData.Product) {
+          const imageGallery = getImageGallery(itemData.Product.image_url);
+          return {
+            ...itemData,
+            Product: {
+              ...itemData.Product,
+              image_gallery: imageGallery.gallery,
+              images: imageGallery // For frontend compatibility
+            }
+          };
+        }
+        return itemData;
+      }) : [];
+
       return {
         ...cart.toJSON(),
+        items: enrichedItems,
         totalItems,
         totalPrice: parseFloat(totalPrice.toFixed(2))
       };
@@ -302,6 +321,23 @@ class CartRepository extends BaseRepository {
     } catch (error) {
       throw new Error(`Error removing out of stock items: ${error.message}`);
     }
+  }
+
+  async findByUserId(userId) {
+    return await this.model.findOne({ where: { userId } });
+  }
+
+  async create(cartData) {
+    return await this.model.create(cartData);
+  }
+
+  async save(cart) {
+    if (cart.isNew) {
+      return await cart.save();
+    }
+    return await this.model.update(cart, {
+      where: { id: cart.id }
+    });
   }
 }
 

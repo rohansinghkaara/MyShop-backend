@@ -1,7 +1,9 @@
 const BaseRepository = require('./BaseRepository');
 const { Order, OrderItem } = require('../models/Order');
+const Product = require('../models/Product');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
+const { getImageGallery } = require('../utils/imageUtils');
 
 class OrderRepository extends BaseRepository {
   constructor() {
@@ -37,7 +39,12 @@ class OrderRepository extends BaseRepository {
         include: [
           {
             model: OrderItem,
-            as: 'items'
+            as: 'items',
+            include: [{
+              model: Product,
+              as: 'Product',
+              attributes: ['id', 'name', 'price_paise', 'sale_price_paise', 'image_url', 'stock', 'description', 'categoryId', 'featured', 'is_new', 'is_sale']
+            }]
           }
         ]
       };
@@ -46,7 +53,29 @@ class OrderRepository extends BaseRepository {
         options.transaction = transaction;
       }
       
-      return await this.model.findByPk(orderId, options);
+      const order = await this.model.findByPk(orderId, options);
+      
+      // Enrich products with image galleries
+      if (order && order.items) {
+        const orderData = order.toJSON();
+        orderData.items = orderData.items.map(item => {
+          if (item.Product && item.Product.image_url) {
+            const imageGallery = getImageGallery(item.Product.image_url);
+            return {
+              ...item,
+              Product: {
+                ...item.Product,
+                image_gallery: imageGallery.gallery,
+                images: imageGallery // For frontend compatibility
+              }
+            };
+          }
+          return item;
+        });
+        return orderData;
+      }
+      
+      return order;
     } catch (error) {
       logger.error('Error finding order by ID:', error);
       throw error;
@@ -73,7 +102,12 @@ class OrderRepository extends BaseRepository {
         include: [
           {
             model: OrderItem,
-            as: 'items'
+            as: 'items',
+            include: [{
+              model: Product,
+              as: 'Product',
+              attributes: ['id', 'name', 'price_paise', 'sale_price_paise', 'image_url', 'stock', 'description', 'categoryId', 'featured', 'is_new', 'is_sale']
+            }]
           }
         ],
         order: [[sortBy, sortOrder]],
@@ -83,8 +117,30 @@ class OrderRepository extends BaseRepository {
 
       const result = await this.model.findAndCountAll(queryOptions);
       
+      // Enrich products with image galleries
+      const enrichedOrders = result.rows.map(order => {
+        const orderData = order.toJSON();
+        if (orderData.items && Array.isArray(orderData.items)) {
+          orderData.items = orderData.items.map(item => {
+            if (item.Product && item.Product.image_url) {
+              const imageGallery = getImageGallery(item.Product.image_url);
+              return {
+                ...item,
+                Product: {
+                  ...item.Product,
+                  image_gallery: imageGallery.gallery,
+                  images: imageGallery // For frontend compatibility
+                }
+              };
+            }
+            return item;
+          });
+        }
+        return orderData;
+      });
+      
       return {
-        orders: result.rows,
+        orders: enrichedOrders,
         totalCount: result.count,
         totalPages: Math.ceil(result.count / limit),
         currentPage: parseInt(page),
@@ -258,15 +314,15 @@ class OrderRepository extends BaseRepository {
 
       const [
         totalOrders,
-        totalRevenue,
+        totalRevenuePaise,
         ordersByStatus,
-        averageOrderValue
+        averageOrderValuePaise
       ] = await Promise.all([
         // Total orders count
         this.model.count({ where: whereClause }),
         
-        // Total revenue
-        this.model.sum('totalAmount', { where: whereClause }),
+        // Total revenue (in paise)
+        this.model.sum('total_amount_paise', { where: whereClause }),
         
         // Orders by status
         this.model.findAll({
@@ -274,30 +330,34 @@ class OrderRepository extends BaseRepository {
           attributes: [
             'status',
             [this.model.sequelize.fn('COUNT', this.model.sequelize.col('id')), 'count'],
-            [this.model.sequelize.fn('SUM', this.model.sequelize.col('totalAmount')), 'revenue']
+            [this.model.sequelize.fn('SUM', this.model.sequelize.col('total_amount_paise')), 'revenuePaise']
           ],
           group: ['status'],
           raw: true
         }),
         
-        // Average order value
+        // Average order value (in paise)
         this.model.findOne({
           where: whereClause,
           attributes: [
-            [this.model.sequelize.fn('AVG', this.model.sequelize.col('totalAmount')), 'average']
+            [this.model.sequelize.fn('AVG', this.model.sequelize.col('total_amount_paise')), 'average']
           ],
           raw: true
         })
       ]);
 
+      // Convert from paise to rupees (divide by 100)
+      const totalRevenue = (parseFloat(totalRevenuePaise) || 0) / 100;
+      const averageOrderValue = (parseFloat(averageOrderValuePaise?.average) || 0) / 100;
+
       return {
         totalOrders: totalOrders || 0,
-        totalRevenue: parseFloat(totalRevenue) || 0,
-        averageOrderValue: parseFloat(averageOrderValue?.average) || 0,
+        totalRevenue: totalRevenue,
+        averageOrderValue: averageOrderValue,
         ordersByStatus: ordersByStatus.reduce((acc, item) => {
           acc[item.status] = {
             count: parseInt(item.count),
-            revenue: parseFloat(item.revenue) || 0
+            revenue: (parseFloat(item.revenuePaise) || 0) / 100
           };
           return acc;
         }, {})
@@ -335,8 +395,8 @@ class OrderRepository extends BaseRepository {
           'productName',
           [OrderItem.sequelize.fn('SUM', OrderItem.sequelize.col('quantity')), 'totalQuantity'],
           [OrderItem.sequelize.fn('SUM', 
-            OrderItem.sequelize.literal('quantity * price')
-          ), 'totalRevenue'],
+            OrderItem.sequelize.literal('quantity * unit_price_paise')
+          ), 'totalRevenuePaise'],
           [OrderItem.sequelize.fn('COUNT', OrderItem.sequelize.col('OrderItem.id')), 'orderCount']
         ],
         group: ['productId', 'productName'],
@@ -349,7 +409,8 @@ class OrderRepository extends BaseRepository {
         productId: product.productId,
         productName: product.productName,
         totalQuantity: parseInt(product.totalQuantity),
-        totalRevenue: parseFloat(product.totalRevenue),
+        // Convert from paise to rupees (divide by 100)
+        totalRevenue: (parseFloat(product.totalRevenuePaise) || 0) / 100,
         orderCount: parseInt(product.orderCount)
       }));
     } catch (error) {
@@ -361,10 +422,37 @@ class OrderRepository extends BaseRepository {
   async getRecentOrders(limit = 10) {
     try {
       return await this.model.findAll({
+        attributes: [
+          'id',
+          'userId',
+          'total_amount_paise',
+          'currency',
+          'status',
+          'razorpay_order_id',
+          'razorpay_payment_id',
+          'razorpay_signature',
+          'receipt',
+          'paymentMethod',
+          'address_json',
+          'orderNotes',
+          'createdAt',
+          'updatedAt'
+        ],
         include: [
           {
             model: OrderItem,
-            as: 'items'
+            as: 'items',
+            attributes: [
+              'id',
+              'orderId',
+              'productId',
+              'quantity',
+              'unit_price_paise',
+              'productName',
+              'productDescription',
+              'createdAt',
+              'updatedAt'
+            ]
           }
         ],
         order: [['createdAt', 'DESC']],

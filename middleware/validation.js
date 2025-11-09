@@ -72,9 +72,23 @@ const validateProduct = [
     .withMessage('Price must be a positive number'),
   
   body('category')
-    .trim()
-    .isLength({ min: 2, max: 50 })
-    .withMessage('Category must be between 2 and 50 characters'),
+    .custom((value) => {
+      // Accept either category name (string, 2-50 chars) or category ID (number or numeric string)
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        // Check if it's a numeric string (category ID)
+        if (!isNaN(trimmed) && trimmed !== '') {
+          return true; // Valid category ID
+        }
+        // Check if it's a category name (2-50 chars)
+        if (trimmed.length >= 2 && trimmed.length <= 50) {
+          return true; // Valid category name
+        }
+      } else if (typeof value === 'number' || !isNaN(value)) {
+        return true; // Valid category ID (number)
+      }
+      throw new Error('Category must be a valid category name (2-50 characters) or category ID');
+    }),
   
   body('stock')
     .isInt({ min: 0 })
@@ -109,9 +123,26 @@ const validateProductUpdate = [
   
   body('category')
     .optional()
-    .trim()
-    .isLength({ min: 2, max: 50 })
-    .withMessage('Category must be between 2 and 50 characters'),
+    .custom((value) => {
+      if (value === undefined || value === null || value === '') {
+        return true; // Optional field
+      }
+      // Accept either category name (string, 2-50 chars) or category ID (number or numeric string)
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        // Check if it's a numeric string (category ID)
+        if (!isNaN(trimmed) && trimmed !== '') {
+          return true; // Valid category ID
+        }
+        // Check if it's a category name (2-50 chars)
+        if (trimmed.length >= 2 && trimmed.length <= 50) {
+          return true; // Valid category name
+        }
+      } else if (typeof value === 'number' || !isNaN(value)) {
+        return true; // Valid category ID (number)
+      }
+      throw new Error('Category must be a valid category name (2-50 characters) or category ID');
+    }),
   
   body('stock')
     .optional()

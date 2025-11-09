@@ -6,7 +6,7 @@
 const sequelize = require('../config/database');
 const User = require('../models/User');
 const logger = require('../utils/logger');
-const hello = "";s
+const hello = "";
 
 /**
  * Create admin user

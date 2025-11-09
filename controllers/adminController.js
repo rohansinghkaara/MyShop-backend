@@ -18,26 +18,48 @@ exports.getDashboard = async (req, res, next) => {
     const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
     const lastMonth = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
     
-    // Get analytics data in parallel
-    const [
-      todayAnalytics,
-      weekAnalytics,
-      monthAnalytics,
-      inventoryReport,
-      topProducts,
-      recentOrders,
-      lowStockProducts,
-      outOfStockProducts
-    ] = await Promise.all([
-      orderService.getOrderAnalytics(today.toISOString(), null),
-      orderService.getOrderAnalytics(lastWeek.toISOString(), null),
-      orderService.getOrderAnalytics(lastMonth.toISOString(), null),
-      inventoryService.getInventoryReport(),
-      orderService.getTopProducts(5, lastMonth.toISOString(), null),
-      orderService.getRecentOrders ? orderService.getRecentOrders(10) : [],
-      inventoryService.getLowStockProducts(10),
-      inventoryService.getOutOfStockProducts()
+    // Helper function to add timeout to promises
+    const withTimeout = (promise, timeoutMs = 5000) => {
+      return Promise.race([
+        promise,
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms`)), timeoutMs)
+        )
+      ]);
+    };
+
+    // Get analytics data in parallel with error handling and timeouts
+    // Use Promise.allSettled so one failure doesn't block others
+    const results = await Promise.allSettled([
+      withTimeout(orderService.getOrderAnalytics(today.toISOString(), null), 5000),
+      withTimeout(orderService.getOrderAnalytics(lastWeek.toISOString(), null), 5000),
+      withTimeout(orderService.getOrderAnalytics(lastMonth.toISOString(), null), 5000),
+      withTimeout(inventoryService.getInventoryReport({ includeLowStock: false, includeOutOfStock: false }), 5000),
+      withTimeout(orderService.getTopProducts(5, lastMonth.toISOString(), null), 5000),
+      withTimeout(orderService.getRecentOrders(10), 5000),
+      withTimeout(inventoryService.getLowStockProducts(10), 5000),
+      withTimeout(inventoryService.getOutOfStockProducts(), 5000)
     ]);
+
+    // Extract results with defaults for failed queries
+    const getResult = (index, defaultValue) => {
+      const result = results[index];
+      if (result.status === 'fulfilled') {
+        return result.value;
+      } else {
+        logger.warn(`Dashboard query ${index} failed:`, result.reason?.message || result.reason);
+        return defaultValue;
+      }
+    };
+
+    const todayAnalytics = getResult(0, { totalOrders: 0, totalRevenue: 0, averageOrderValue: 0, ordersByStatus: {} });
+    const weekAnalytics = getResult(1, { totalOrders: 0, totalRevenue: 0, averageOrderValue: 0, ordersByStatus: {} });
+    const monthAnalytics = getResult(2, { totalOrders: 0, totalRevenue: 0, averageOrderValue: 0, ordersByStatus: {} });
+    const inventoryReport = getResult(3, { summary: { totalProducts: 0, totalStockValue: 0, stockByCategory: {}, stockStatus: {} } });
+    const topProducts = getResult(4, []);
+    const recentOrders = getResult(5, []);
+    const lowStockProducts = getResult(6, []);
+    const outOfStockProducts = getResult(7, []);
 
     // Calculate growth percentages
     const calculateGrowth = (current, previous) => {

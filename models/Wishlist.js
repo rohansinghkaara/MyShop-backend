@@ -150,6 +150,18 @@ WishlistItem.belongsTo(Wishlist, {
   as: 'wishlist'
 });
 
+// Associate WishlistItem with Product
+const Product = require('./Product');
+WishlistItem.belongsTo(Product, {
+  foreignKey: 'productId',
+  as: 'product'
+});
+
+Product.hasMany(WishlistItem, {
+  foreignKey: 'productId',
+  as: 'wishlistItems'
+});
+
 // Instance methods for Wishlist
 Wishlist.prototype.getItemCount = async function() {
   return await WishlistItem.count({
@@ -163,12 +175,16 @@ Wishlist.prototype.getTotalValue = async function() {
     include: [{
       model: sequelize.models.Product,
       as: 'product',
-      attributes: ['price']
+      attributes: ['price_paise', 'sale_price_paise']
     }]
   });
 
   return items.reduce((total, item) => {
-    return total + (item.product ? parseFloat(item.product.price) : 0);
+    if (item.product) {
+      const pricePaise = item.product.sale_price_paise || item.product.price_paise || 0;
+      return total + (pricePaise / 100);
+    }
+    return total;
   }, 0);
 };
 
@@ -192,7 +208,9 @@ Wishlist.prototype.addItem = async function(productId, options = {}) {
   if (!price) {
     const product = await sequelize.models.Product.findByPk(productId);
     if (product) {
-      price = product.price;
+      // Use sale_price_paise if available, otherwise price_paise, convert to rupees
+      const pricePaise = product.sale_price_paise || product.price_paise || 0;
+      price = pricePaise / 100;
     }
   }
 
@@ -309,7 +327,7 @@ Wishlist.getUserWishlists = async function(userId) {
       include: [{
         model: sequelize.models.Product,
         as: 'product',
-        attributes: ['id', 'name', 'price', 'image', 'stock']
+        attributes: ['id', 'name', 'price_paise', 'sale_price_paise', 'image_url', 'stock']
       }]
     }],
     order: [
@@ -354,7 +372,7 @@ Wishlist.getPublicWishlists = async function(limit = 10, offset = 0) {
       include: [{
         model: sequelize.models.Product,
         as: 'product',
-        attributes: ['id', 'name', 'price', 'image']
+        attributes: ['id', 'name', 'price_paise', 'sale_price_paise', 'image_url']
       }]
     }],
     limit,
@@ -373,7 +391,7 @@ WishlistItem.getPopularProducts = async function(limit = 10) {
     include: [{
       model: sequelize.models.Product,
       as: 'product',
-      attributes: ['id', 'name', 'price', 'image', 'stock']
+      attributes: ['id', 'name', 'price_paise', 'sale_price_paise', 'image_url', 'stock']
     }],
     group: ['productId'],
     order: [[sequelize.fn('COUNT', sequelize.col('productId')), 'DESC']],
@@ -386,7 +404,7 @@ WishlistItem.checkPriceDrops = async function() {
     include: [{
       model: sequelize.models.Product,
       as: 'product',
-      attributes: ['id', 'name', 'price']
+      attributes: ['id', 'name', 'price_paise', 'sale_price_paise']
     }]
   });
 
@@ -394,7 +412,8 @@ WishlistItem.checkPriceDrops = async function() {
 
   for (const item of items) {
     if (item.product && item.priceWhenAdded) {
-      const currentPrice = parseFloat(item.product.price);
+      const pricePaise = item.product.sale_price_paise || item.product.price_paise || 0;
+      const currentPrice = pricePaise / 100; // Convert from paise to rupees
       const originalPrice = parseFloat(item.priceWhenAdded);
       
       if (currentPrice < originalPrice) {

@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const serverless = require('serverless-http');
 const logger = require('./utils/logger');
 const requestLogger = require('./middleware/requestLogger');
 const errorHandler = require('./middleware/errorHandler');
@@ -61,6 +62,10 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Serve static files from the 'public' directory
 app.use(express.static('public'));
+
+// Serve uploaded files from the 'uploads' directory
+const path = require('path');
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Request logging middleware
 app.use(requestLogger);
@@ -139,7 +144,10 @@ app.post('/api/logout', protect, logout);
 // Error handler middleware (must be after routes)
 app.use(errorHandler);
 
-
+// Wrap Express app with serverless-http for serverless deployment (Vercel, AWS Lambda, etc.)
+const serverlessHandler = serverless(app, {
+  binary: ['image/*', 'application/pdf', 'application/octet-stream']
+});
 
 // For local development, you can still listen on a port
 if (require.main === module) {
@@ -149,4 +157,6 @@ if (require.main === module) {
   });
 }
 
+// Export both the app (for local development/testing) and serverless handler (for deployment)
 module.exports = app;
+module.exports.handler = serverlessHandler;

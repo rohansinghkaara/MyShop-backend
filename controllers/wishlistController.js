@@ -2,6 +2,7 @@ const { Wishlist, WishlistItem } = require('../models/Wishlist');
 const Product = require('../models/Product');
 const User = require('../models/User');
 const logger = require('../utils/logger');
+const { getImageGallery } = require('../utils/imageUtils');
 
 /**
  * @desc    Get all wishlists for current user
@@ -14,10 +15,32 @@ const getUserWishlists = async (req, res, next) => {
 
     const wishlists = await Wishlist.getUserWishlists(req.user.id);
 
+    // Enrich products with image galleries
+    const enrichedWishlists = wishlists.map(wishlist => {
+      const wishlistData = wishlist.toJSON ? wishlist.toJSON() : wishlist;
+      if (wishlistData.items && Array.isArray(wishlistData.items)) {
+        wishlistData.items = wishlistData.items.map(item => {
+          if (item.product && item.product.image_url) {
+            const imageGallery = getImageGallery(item.product.image_url);
+            return {
+              ...item,
+              product: {
+                ...item.product,
+                image_gallery: imageGallery.gallery,
+                images: imageGallery // For frontend compatibility
+              }
+            };
+          }
+          return item;
+        });
+      }
+      return wishlistData;
+    });
+
     res.status(200).json({
       success: true,
-      count: wishlists.length,
-      data: wishlists
+      count: enrichedWishlists.length,
+      data: enrichedWishlists
     });
   } catch (error) {
     logger.error('Error fetching user wishlists:', error);
@@ -44,7 +67,7 @@ const getDefaultWishlist = async (req, res, next) => {
         include: [{
           model: Product,
           as: 'product',
-          attributes: ['id', 'name', 'price', 'image', 'stock', 'description']
+          attributes: ['id', 'name', 'price_paise', 'sale_price_paise', 'image_url', 'stock', 'description', 'categoryId', 'featured', 'is_new', 'is_sale']
         }]
       }],
       order: [
@@ -52,9 +75,28 @@ const getDefaultWishlist = async (req, res, next) => {
       ]
     });
 
+    // Enrich products with image galleries
+    const wishlistData = wishlist.toJSON();
+    if (wishlistData.items && Array.isArray(wishlistData.items)) {
+      wishlistData.items = wishlistData.items.map(item => {
+        if (item.product && item.product.image_url) {
+          const imageGallery = getImageGallery(item.product.image_url);
+          return {
+            ...item,
+            product: {
+              ...item.product,
+              image_gallery: imageGallery.gallery,
+              images: imageGallery // For frontend compatibility
+            }
+          };
+        }
+        return item;
+      });
+    }
+
     res.status(200).json({
       success: true,
-      data: wishlist
+      data: wishlistData
     });
   } catch (error) {
     logger.error('Error fetching default wishlist:', error);

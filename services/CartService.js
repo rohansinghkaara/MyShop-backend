@@ -11,6 +11,7 @@ class CartService extends BaseService {
     super(cartRepository);
     this.cartRepository = cartRepository;
     this.productRepository = productRepository;
+    this.logger = logger; // Add this line to fix the undefined logger
   }
 
   async getUserCart(userId) {
@@ -34,73 +35,61 @@ class CartService extends BaseService {
     }
   }
 
-  async addItemToCart(userId, productId, quantity = 1) {
+  async addItemToCart(userId, productId, quantity) {
     try {
-      logger.info('Starting addItemToCart', { userId, productId, quantity });
-
-      // Validate product exists and has sufficient stock
-      const product = await this.productRepository.findById(productId);
-      logger.info('Product found', { productId: product?.id, name: product?.name });
-
-      if (!product) {
-        throw new Error('Product not found');
-      }
-
-      if (product.stock < quantity) {
-        throw new Error(`Only ${product.stock} items available in stock`);
-      }
-
-      // Find or create user cart
-      logger.info('Finding or creating cart for user', { userId });
-      const [cart] = await this.cartRepository.findOrCreateUserCart(userId);
-      logger.info('Cart found/created', { cartId: cart.id });
-
-      // Check if product already in cart
-      logger.info('Checking for existing cart item');
-      const { CartItem } = require('../models/Cart');
-      const existingItem = await CartItem.findOne({
-        where: { cartId: cart.id, productId }
-      });
-      logger.info('Existing item check complete', { exists: !!existingItem });
-
-      if (existingItem) {
-        const newQuantity = existingItem.quantity + quantity;
-        if (product.stock < newQuantity) {
-          throw new Error(`Only ${product.stock} items available in stock`);
+        // First verify product exists
+        const product = await this.productRepository.findById(productId);
+        if (!product) {
+            const error = new Error(`Product with ID ${productId} not found`);
+            error.statusCode = 404;
+            error.code = 'PRODUCT_NOT_FOUND';
+            throw error;
         }
-      }
 
-      // Add item to cart
-      // Convert price from paise to decimal (paise / 100)
-      const priceInRupees = product.sale_price_paise || product.price_paise;
-      const priceDecimal = priceInRupees / 100;
-      logger.info('Adding item to cart', { cartId: cart.id, productId, quantity, price: priceDecimal });
+        // Find or create cart
+        let cart = await this.cartRepository.findByUserId(userId);
+        
+        // Create new cart if it doesn't exist
+        if (!cart) {
+            cart = await this.cartRepository.create({
+                userId
+            });
+            logger.info('New cart created', { userId, cartId: cart.id });
+        }
 
-      await this.cartRepository.addItemToCart(
-        cart.id,
-        productId,
-        quantity,
-        priceDecimal
-      );
-      logger.info('Item added to CartItem table');
+        // Use CartItem to add/update item
+        const price = product.price_paise;
+        await this.cartRepository.addItemToCart(cart.id, productId, quantity, price);
+        
+        logger.info('Cart item added/updated', {
+            userId,
+            cartId: cart.id,
+            productId,
+            quantity,
+            price
+        });
 
-      logger.info('Item added to cart', {
-        userId,
-        productId,
-        quantity,
-        productName: product.name,
-        timestamp: new Date().toISOString()
-      });
+        // Return the full cart with Product associations
+        const fullCart = await this.cartRepository.getCartWithCalculations(userId);
+        
+        return fullCart;
 
-      // Return updated cart
-      logger.info('Getting cart with calculations');
-      const result = await this.cartRepository.getCartWithCalculations(userId);
-      logger.info('Returning cart result');
-      return result;
     } catch (error) {
-      logger.error('Error in addItemToCart:', error);
-      logger.logError(error, null);
-      throw this.handleError(error, 'addItemToCart');
+        logger.error('Error in addItemToCart:', {
+            userId,
+            productId,
+            quantity,
+            error: error.message
+        });
+        
+        // Preserve product not found errors
+        if (error.code === 'PRODUCT_NOT_FOUND' || error.message.includes('Product') && error.message.includes('not found')) {
+            error.statusCode = error.statusCode || 404;
+            error.code = error.code || 'PRODUCT_NOT_FOUND';
+            throw error;
+        }
+        
+        throw this.handleError(error, 'addItemToCart');
     }
   }
 
